@@ -36,6 +36,10 @@ Paperclip is a Node.js server and React UI that orchestrates a team of AI agents
 
 It looks like a task manager. Under the hood: org charts, budgets, governance, goal alignment, and agent coordination.
 
+## Main page
+
+![Paperclip dashboard main page](docs/main-page.png)
+
 **Manage business goals, not pull requests.**
 
 |        | Step            | Example                                                            |
