@@ -330,7 +330,11 @@ describeEmbeddedPostgres("issue recovery actions", () => {
 
   it.each([
     ["process_lost", undefined, "coder"],
-    ["adapter_failed", "successful_run_missing_state", "coder"],
+    // An exhausted missing-disposition handoff must NOT route back to the original
+    // assignee: by this point that agent already failed to record a disposition twice
+    // (its own run + the one corrective status-only wake), so re-routing to it would
+    // restart the same missing-disposition loop. It escalates up the manager ladder.
+    ["adapter_failed", "successful_run_missing_state", "manager"],
     ["codex_output_inactivity_monitor", undefined, "coder"],
     ["workspace_validation_failed", "workspace_validation_failed", "manager"],
     ["adapter_failed", undefined, "manager"],

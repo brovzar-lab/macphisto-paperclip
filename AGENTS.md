@@ -14,7 +14,7 @@ Guidance for human and AI contributors working in this repository.
 - Company **Macphisto Enterprises** created (ID: `93037322-e94f-4089-88c1-66e9f041dd34`, prefix: `MAC`).
 - Remote access via Cloudflare Tunnel + Tailscale Funnel configured. Board claimed by `billyrovzar@gmail.com`.
 - Paperclip Expert skills installed in Hermes (`~/.hermes/skills/paperclip-expert/`).
-- Config: `BETTER_AUTH_SECRET=paperclip-dev-secret` in `~/.paperclip/instances/default/.env`.
+- Config: `BETTER_AUTH_SECRET` is loaded only from owner-only `~/.paperclip/.env` by the service launcher.
 - Agent business brainstorming session completed — 4 ideas (SEO Affiliate, FBA Arbitrage, Digital Funnel, Etsy POD) documented in HTML artifact.
 
 **In progress:**
@@ -105,12 +105,12 @@ pnpm dev
 # → http://127.0.0.1:3100
 ```
 
-For remote access (authenticated mode + LAN bind):
+For authenticated access through the managed tunnel (loopback origin):
 ```bash
 cd /Users/macphisto/projects/paperclip
-export BETTER_AUTH_SECRET=paperclip-dev-secret
+set -a; source ~/.paperclip/.env; set +a
 pnpm dev
-# → edit ~/.paperclip/instances/default/config.json to set deploymentMode: "authenticated", bind: "lan", host: "0.0.0.0"
+# → keep the local service loopback-bound; expose it only through the managed tunnel
 ```
 
 For Cloudflare quick tunnel (public HTTPS, no auth needed):

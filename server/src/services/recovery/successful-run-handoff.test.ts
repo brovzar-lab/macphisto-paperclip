@@ -377,4 +377,50 @@ describe("successful run handoff decision", () => {
     expect(isSuccessfulRunHandoffRequiredNoticeBody("## This issue still needs a next step\n\nold body")).toBe(true);
     expect(isSuccessfulRunHandoffRequiredNoticeBody("Unrelated comment")).toBe(false);
   });
+
+  // AC2 regression: the corrective status-only wake must forbid launching more
+  // background work, so the recovery run cannot repeat the AIT-134 move (launch a
+  // detached job, exit with no disposition). The instruction has to name the ban.
+  it("forbids launching background work in the corrective status-only instruction", () => {
+    const decision = decide();
+    expect(decision.kind).toBe("enqueue");
+    if (decision.kind !== "enqueue") return;
+    expect(decision.instruction).toContain("Do NOT call the Workflow tool");
+    expect(decision.instruction).toMatch(/background/i);
+    expect(decision.instruction).toContain("cannot count as a successful handoff");
+  });
+
+  // AC4 duplicate/idempotent wake: if a corrective wake for this source run already
+  // exists, do not enqueue a second one.
+  it("skips when an idempotent corrective wake already exists for this source run", () => {
+    expect(decide({ idempotentWakeExists: true })).toEqual({
+      kind: "skip",
+      reason: "corrective handoff wake already exists for this source run",
+    });
+  });
+
+  // AC4 two distinct companies: the same missing-disposition scenario in a second
+  // company produces an equivalent corrective wake, proving shared platform behavior
+  // rather than company-specific handling.
+  it("produces an equivalent corrective wake for a second company", () => {
+    const companyBDecision = decide({
+      run: { ...run, id: "run-9", companyId: "company-2", agentId: "agent-9", contextSnapshot: { issueId: "issue-9" } } as any,
+      issue: { ...issue, id: "issue-9", companyId: "company-2", identifier: "LEM-1", assigneeAgentId: "agent-9" } as any,
+      agent: { ...agent, id: "agent-9", companyId: "company-2" } as any,
+      taskKey: "issue-9",
+    });
+
+    expect(companyBDecision.kind).toBe("enqueue");
+    if (companyBDecision.kind !== "enqueue") return;
+    expect(companyBDecision.targetAgentId).toBe("agent-9");
+    expect(companyBDecision.idempotencyKey).toBe("finish_successful_run_handoff:issue-9:run-9:1");
+    expect(companyBDecision.payload).toMatchObject({
+      issueId: "issue-9",
+      sourceRunId: "run-9",
+      handoffReason: SUCCESSFUL_RUN_MISSING_STATE_REASON,
+      handoffAttempt: 1,
+      maxHandoffAttempts: 1,
+    });
+    expect(companyBDecision.instruction).toContain("Do NOT call the Workflow tool");
+  });
 });
