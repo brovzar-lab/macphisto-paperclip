@@ -229,3 +229,176 @@ describe("run liveness classifier", () => {
     expect(classification.nextAction).toBeNull();
   });
 });
+
+// AC4 regression matrix for the AIT-134 incident: a run that launches detached
+// background work and promises to post the result "later" must not masquerade as
+// completed/advanced progress, while a run that genuinely awaited and delivered the
+// work must not be downgraded.
+describe("deferred background work regression (AIT-134)", () => {
+  // The literal AIT-134 clean-exit: the heartbeat kicked off an un-awaited
+  // five-angle deep-research workflow, wrote a "will post later" comment (which
+  // would otherwise count as concrete issue-comment evidence → advanced), and
+  // exited. No process survived, so no unmanagedBackgroundTask evidence exists.
+  // The prose detector must intercept this as needs_followup.
+  it("downgrades an un-awaited background launch with a deferred-result promise to needs_followup", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      resultJson: {
+        summary:
+          "Launched a five-angle deep-research background workflow across the sources. I'll post the full results later once it finishes.",
+      },
+      evidence: {
+        issueCommentsCreated: 1,
+        latestEvidenceAt: new Date("2026-11-18T03:30:00Z"),
+      },
+    });
+
+    expect(classification.livenessState).toBe("needs_followup");
+    expect(classification.livenessReason).toContain("background work");
+  });
+
+  // Same signal surfaced via an issue comment body rather than the result summary.
+  it("detects the deferred-background pattern from issue comment bodies", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      resultJson: { summary: "Working on it." },
+      issueCommentBodies: [
+        "Kicked off the deep-research workflow in the background; results will be posted once it completes.",
+      ],
+      evidence: {
+        issueCommentsCreated: 1,
+        latestEvidenceAt: new Date("2026-11-18T03:30:00Z"),
+      },
+    });
+
+    expect(classification.livenessState).toBe("needs_followup");
+  });
+
+  // No false positive: a run that awaited the job and posted the finished report in
+  // past tense (both a launch phrase AND real concrete evidence, but no deferral
+  // promise) must remain advanced.
+  it("does not downgrade a genuinely completed deep-research run", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      resultJson: {
+        summary:
+          "Completed the deep-research sweep and posted the final 17,167-character report to the issue.",
+      },
+      evidence: {
+        issueCommentsCreated: 1,
+        documentRevisionsCreated: 1,
+        latestEvidenceAt: new Date("2026-11-18T05:00:00Z"),
+      },
+    });
+
+    expect(classification.livenessState).toBe("advanced");
+  });
+
+  // A run that merely mentions background tooling without promising a deferred
+  // deliverable is not downgraded (requires BOTH phrases).
+  it("does not downgrade a run that only mentions background tooling", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      resultJson: {
+        summary: "Checked whether the indexer was still running in the background; it was idle, so I finished the fix.",
+      },
+      evidence: {
+        issueCommentsCreated: 1,
+        latestEvidenceAt: new Date("2026-11-18T05:00:00Z"),
+      },
+    });
+
+    expect(classification.livenessState).toBe("advanced");
+  });
+
+  // A recorded first-class disposition always wins over the prose detector.
+  it("keeps a done disposition even when the run narrates deferred background work", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      issue: { ...baseInput.issue, status: "done" },
+      resultJson: {
+        summary: "Launched a background research job; I'll post results later.",
+      },
+    });
+
+    expect(classification.livenessState).toBe("completed");
+  });
+
+  it("keeps a blocked disposition even when the run narrates deferred background work", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      issue: { ...baseInput.issue, status: "blocked" },
+      resultJson: {
+        summary: "Launched a background research job; I'll post results later.",
+      },
+    });
+
+    expect(classification.livenessState).toBe("blocked");
+  });
+
+  // Lost background job on a *succeeded* run: Paperclip reaped the orphaned process
+  // group, so unmanagedBackgroundTask evidence is attached. This must be follow-up,
+  // not an advanced success.
+  it("treats a reaped background task on a succeeded run as needs_followup", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      resultJson: {
+        summary: "Progress made.",
+        unmanagedBackgroundTask: {
+          kind: "orphaned_process_group_cleanup",
+          stopped: true,
+          stopReason: "unmanaged_background_task_stopped",
+          reason: "unmanaged background task stopped; no durable live path",
+        },
+      },
+    });
+
+    expect(classification.livenessState).toBe("needs_followup");
+    expect(classification.livenessReason).toBe("unmanaged background task stopped; no durable live path");
+  });
+
+  // Failed/timeout background job: a non-succeeded run carrying the reaped-task
+  // evidence reports the specific background-task reason, not a generic failure.
+  it("reports the background-task reason when a timed-out job fails the run", () => {
+    const classification = classifyRunLiveness({
+      ...baseInput,
+      runStatus: "failed",
+      errorCode: "timeout",
+      resultJson: {
+        stopReason: "unmanaged_background_task_stopped",
+        unmanagedBackgroundTask: {
+          kind: "orphaned_process_group_cleanup",
+          stopped: true,
+          stopReason: "unmanaged_background_task_stopped",
+          reason: "unmanaged background task stopped; no durable live path",
+        },
+      },
+    });
+
+    expect(classification.livenessState).toBe("failed");
+    expect(classification.livenessReason).toBe("unmanaged background task stopped; no durable live path");
+  });
+
+  // Shared platform behavior: the classifier is company-agnostic, so the same
+  // deferred-background prose from two distinct companies classifies identically.
+  it("classifies the deferred-background pattern identically across companies", () => {
+    const makeInput = (company: string) => ({
+      ...baseInput,
+      issue: { ...baseInput.issue, title: `${company} research task` },
+      issueCommentBodies: [
+        `[${company}] Started a multi-agent research run in the background; I will share the findings later.`,
+      ],
+      evidence: {
+        issueCommentsCreated: 1,
+        latestEvidenceAt: new Date("2026-11-18T03:30:00Z"),
+      },
+    });
+
+    const companyA = classifyRunLiveness(makeInput("Aiteboy"));
+    const companyB = classifyRunLiveness(makeInput("Lemon"));
+
+    expect(companyA.livenessState).toBe("needs_followup");
+    expect(companyB.livenessState).toBe("needs_followup");
+    expect(companyA.livenessReason).toBe(companyB.livenessReason);
+  });
+});

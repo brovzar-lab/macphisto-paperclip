@@ -12,6 +12,7 @@ describe("recovery model profile policy", () => {
       recoveryIntent: "status_only",
       allowDeliverableWork: false,
       allowDocumentUpdates: false,
+      preventBackgroundWork: true,
       resumeRequiresNormalModel: true,
       modelProfile: "cheap",
     });

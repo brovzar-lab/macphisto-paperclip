@@ -78,6 +78,26 @@ const PLAN_TASK_DESCRIPTION_RE =
 const UNMANAGED_BACKGROUND_TASK_STOP_REASON = "unmanaged_background_task_stopped";
 const UNMANAGED_BACKGROUND_TASK_LIVENESS_REASON = "unmanaged background task stopped; no durable live path";
 
+// A run can declare that it launched detached/background work (a deep-research
+// job, a five-angle workflow, an async task) and promise to post the result
+// "later" without awaiting it, persisting a job handle, or recording a durable
+// continuation. When that background work is not a surviving OS process, the
+// heartbeat exits cleanly, the orphaned-process-group sweep never fires, and no
+// `unmanagedBackgroundTask` evidence is attached — so the run would otherwise
+// read as an `advanced`/`completed` success even though the promised deliverable
+// is not durably owned and can be silently lost. We detect this prose pattern so
+// the run classifies as `needs_followup` and is driven through the missing
+// disposition handoff instead of masquerading as real progress. The match is
+// intentionally conservative: it requires BOTH an explicit background-launch
+// phrase AND a deferred-report phrase, so a run that merely mentions background
+// tooling (or legitimately awaited/persisted the work) is not downgraded.
+export const DEFERRED_BACKGROUND_WORK_LIVENESS_REASON =
+  "run deferred its deliverable to un-awaited background work without a durable continuation";
+const BACKGROUND_WORK_LAUNCH_RE =
+  /\b(?:in the background|background(?:ed)?\s+(?:job|task|run|process|processes|workflow|workflows|research|agent|sweep)|detached\s+(?:job|task|workflow|process|run|research)|(?:deep[-\s]?research|five[-\s]?angle|multi[-\s]?angle|multi[-\s]?agent)\s+(?:job|run|runs|workflow|workflows|sweep|research)|(?:workflow|research|job|task)\s+(?:is|are|still)\s+running)\b/i;
+const BACKGROUND_WORK_DEFER_REPORT_RE =
+  /\b(?:(?:i(?:'ll| will| am going to|'m going to)|we(?:'ll| will)|will)\s+(?:post|share|report|provide|deliver|add|drop|upload|attach|summari[sz]e|write up|circle back)\b[\s\S]{0,80}?\b(?:later|once|when|after|afterwards|shortly|soon|finish(?:es|ed)?|complet(?:e|es|ed|ion)|done|ready|result|results|output|findings?)|results?\s+(?:will\s+be|are\s+being|should\s+be)\s+(?:posted|shared|ready|available|produced|generated|delivered)|post(?:ing)?\s+(?:the\s+)?(?:results?|output|findings?|report)\s+(?:later|once|when|after|shortly|soon))\b/i;
+
 function compactReason(reason: string) {
   return reason.length <= 500 ? reason : `${reason.slice(0, 497)}...`;
 }
@@ -174,6 +194,20 @@ export function looksLikePlanningOnly(input: RunLivenessClassificationInput) {
   const text = actionabilityText(input);
   if (!text) return false;
   return PLANNING_ONLY_RE.test(text) || NEXT_STEPS_RE.test(text) || /^\s*next(?: steps?| action)?\s*:/im.test(text);
+}
+
+// True when a run narrates that it kicked off detached/background work AND
+// promised to deliver the result "later" without awaiting it or recording a
+// durable continuation. We only read high-signal sources (the agent's own
+// summary, next action, issue comments, continuation summary), never raw tool
+// transcript, so a deep-research run that merely logs "running in the
+// background" in stdout is not downgraded. BOTH a launch phrase and a
+// deferred-report phrase are required, so a run that genuinely awaited the job
+// and posted the finished report in past tense does not match.
+export function looksLikeDeferredBackgroundWork(input: RunLivenessClassificationInput) {
+  const text = highSignalSources(input).join("\n").trim();
+  if (!text) return false;
+  return BACKGROUND_WORK_LAUNCH_RE.test(text) && BACKGROUND_WORK_DEFER_REPORT_RE.test(text);
 }
 
 export function isPlanningOrDocumentTask(issue: RunLivenessIssueInput | null | undefined) {
@@ -339,6 +373,32 @@ export function classifyRunLiveness(input: RunLivenessClassificationInput): RunL
 
   if (declaredBlocker(input)) {
     return output("blocked", issueStatus === "blocked" ? "Issue status is blocked" : "Run output declared a concrete blocker", nextAction);
+  }
+
+  // A run can report "succeeded" while Paperclip reaped a detached background
+  // task it left behind (e.g. an un-awaited deep-research workflow). The
+  // heartbeat completed, but whatever that task was going to produce was never
+  // persisted and there is no durable live path. Any surface progress (a
+  // "will post results later" comment) is not a real advance, so treat it as
+  // needing follow-up rather than letting it classify as advanced/completed.
+  // Issue dispositions already recorded above (done/cancelled/blocked) win.
+  if (hasUnmanagedBackgroundTaskEvidence(input.resultJson)) {
+    return output("needs_followup", UNMANAGED_BACKGROUND_TASK_LIVENESS_REASON, nextAction);
+  }
+
+  // The sweep-based evidence above only exists when Paperclip actually reaped a
+  // surviving detached process. A run can instead exit the heartbeat cleanly
+  // after narrating that it launched un-awaited background work and will "post
+  // the result later" — the AIT-134 incident. No process survives, so no
+  // unmanagedBackgroundTask evidence is attached, and the comment it wrote would
+  // otherwise read as concrete `advanced` progress. Detect that prose so the run
+  // is driven through the missing-disposition handoff instead. It still sits
+  // after done/cancelled/blocked, so a real recorded disposition always wins,
+  // and the downstream handoff decision still defers to any genuine durable path
+  // (persisted monitor, queued wake, interaction, execution state), so a run
+  // that truly persisted a job handle is not forced into a corrective wake.
+  if (looksLikeDeferredBackgroundWork(input)) {
+    return output("needs_followup", DEFERRED_BACKGROUND_WORK_LIVENESS_REASON, nextAction);
   }
 
   if (!usefulOutput && !concreteEvidence) {

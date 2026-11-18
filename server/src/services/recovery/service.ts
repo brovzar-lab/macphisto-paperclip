@@ -2473,8 +2473,12 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }) {
     const originalAgentId = input.latestRun?.agentId ?? input.issue.assigneeAgentId;
     const returnOwnerAgentId = input.issue.assigneeAgentId ?? originalAgentId;
+    // SUCCESSFUL_RUN_MISSING_STATE_REASON is intentionally excluded from routeToOriginal.
+    // When the corrective handoff is exhausted the original agent has already failed to record
+    // a disposition twice (original run + corrective run). Routing back to the same agent would
+    // restart the missing-disposition cycle. The recovery action must escalate to the manager
+    // ladder so a supervisor can intervene rather than repeating indefinitely.
     const routeToOriginal = input.recoveryCause === "process_lost" ||
-      input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON ||
       input.recoveryCause === "codex_output_inactivity_monitor";
     if (input.recoveryCause === "provider_quota") {
       const retryAgentId = await resolveInvokableRecoveryAgentId(input.issue, originalAgentId);

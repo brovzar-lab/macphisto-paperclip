@@ -341,6 +341,8 @@ export function buildSuccessfulRunHandoffInstruction(input: {
     "",
     "This is a status-only retry to the original agent. Record a disposition; do not start new work.",
     "",
+    "**IMPORTANT — durable async contract.** A prior run likely launched a detached background job (via the Workflow tool, Agent tool, or similar) and exited without awaiting or persisting its result. That is not a valid handoff. Do NOT call the Workflow tool, Agent tool, or any background scheduling tool in this recovery run. If a background job is already in flight, link it as a named blocker (`blockedByIssueIds`) and mark the issue `blocked`, or move to `in_review` with a monitor/callback path. A plain 'running in background, I will post later' cannot count as a successful handoff.",
+    "",
     "Resolve the missing disposition before creating or revising any new artifacts. Choose **exactly one** outcome and perform the matching Paperclip action:",
     "",
     "**Is the issue finished?**",

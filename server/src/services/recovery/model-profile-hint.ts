@@ -6,6 +6,7 @@ export const STATUS_ONLY_RECOVERY_GUARD_CONTEXT = {
   recoveryIntent: "status_only",
   allowDeliverableWork: false,
   allowDocumentUpdates: false,
+  preventBackgroundWork: true,
   resumeRequiresNormalModel: true,
 } as const;
 
@@ -15,6 +16,7 @@ const RECOVERY_MODEL_PROFILE_HINT_KEYS = [
   "recoveryIntent",
   "allowDeliverableWork",
   "allowDocumentUpdates",
+  "preventBackgroundWork",
   "resumeRequiresNormalModel",
 ] as const;
 
